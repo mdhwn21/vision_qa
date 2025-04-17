@@ -1,0 +1,5 @@
+Position | Fits with one camera? | Typical height needed | Notes
+Behind baseline, centre‑line (the design above) | ✔ | 12‑18 ft | Natural broadcast angle; simple geometry; nobody hits the pole during play.
+Mid‑court, sideline (on net‑post) | Feasible but requires ~20 ft height to see full width with φ = 55 °.Good for tactical “top‑down” view. | 18‑22 ft | Needs tall structure and stronger tilt; players may block part of view.
+Corner pole (baseline × sideline) | Hard: diagonal of court is 48 ft → you would need ≈ 26 ft height and ~45 ° yaw to keep width in 80 ° cone. | ≥ 25 ft | Only sensible if you want a dramatic oblique shot and can go high.
+Directly overhead, centre‑court | Needs ≥ 26 ft with lens rotated 90 ° (use 80 ° as vertical). | 26‑30 ft | Bird’s‑eye is great for bounce detection, but mounting is often impractical indoors.
