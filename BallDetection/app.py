@@ -13,7 +13,7 @@ import supervision as sv
 from ball_tracker import BallTracker
 from ball_trajectory import BallTrajectoryAnnotator
 from bounce_annotator import BounceAnnotator
-from bounce_detector import BounceDetector
+from bounce_detector import BounceDetector,ConfirmBounceDetector,AngleBounceDetector
 # ——— Setup absolute paths ———
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "..", "Models")
@@ -28,16 +28,15 @@ def run_inference(
     frame: np.ndarray,
     frame_number: int,
     *,
-    smoother: BallTracker,     # our new tracker
+    smoother: BallTracker,
     trajectory_annotator: BallTrajectoryAnnotator,
-    bounce_detector: BounceDetector,
+    angle_detector: AngleBounceDetector,
     bounce_annotator: BounceAnnotator,
     save_csv: bool = False,
     writer=None,
     conf_threshold: float = 0.25,
     iou_threshold: float = 0.45
 ) -> np.ndarray:
-    # sanity checks
     if save_csv and writer is None:
         raise ValueError("writer required if save_csv=True")
 
@@ -45,64 +44,72 @@ def run_inference(
     res  = model(frame, conf=conf_threshold, iou=iou_threshold)[0]
     dets = sv.Detections.from_ultralytics(res)
 
-    # 2) ask smoother for the one box to draw
+    # 2) smoothing & selection
     chosen_idx, chosen_box, chosen_center = smoother.update(dets.xyxy)
-    
-    # 3) build a Detections for annotation
+
+    # 3) prepare for annotation
     if chosen_idx is not None:
-        # annotate just the chosen detection
         det_to_draw = sv.Detections(
             xyxy       = np.array([chosen_box]),
             confidence = np.array([dets.confidence[chosen_idx]]),
             class_id   = np.array([dets.class_id[chosen_idx]])
         )
     else:
-        # fallback: annotate all until lock-in
         det_to_draw = dets
 
     # 4) draw boxes
     img = sv.BoxAnnotator().annotate(frame, det_to_draw)
-    
+
     # 5) overlay frame number
     cv2.putText(
         img, str(frame_number),
         (10,30), cv2.FONT_HERSHEY_COMPLEX,
-        1, (255,0,0), 2, cv2.LINE_AA
+        1, (0,255,0), 2, cv2.LINE_AA
     )
-    traj_str = ""
-    
-    # 6) draw trajectory for the locked ball
-    if smoother.trajectory:
-       img = trajectory_annotator.add_trajectory(img, smoother.trajectory)
-       traj_str = str(list(smoother.trajectory))
-    else:
-        traj_str = ""
-    # existing: smoother.trajectory.append(chosen_center)
-    bounced, vertical_velocity = bounce_detector.feed(chosen_center)
-    if bounced:
-        img = bounce_annotator.annotate(img, chosen_center)
 
-    # 7) CSV logging: ensure one row per frame
+    # 6) draw trajectory
+    traj_str = ""
+    if smoother.trajectory:
+        img = trajectory_annotator.add_trajectory(img, smoother.trajectory)
+        traj_str = str(list(smoother.trajectory))
+
+    # 7) angle-based bounce detection
+    traj = list(smoother.trajectory)
+    bounced, angle_deg = angle_detector.detect(frame_number, traj)
+
+    # choose center for annotation (bounce happens @ previous frame)
+    if bounced and len(smoother.trajectory) >= 2:
+        bounce_center = smoother.trajectory[-2]
+    else:
+        bounce_center = chosen_center
+
+    img = bounce_annotator.annotate(
+        img,
+        bounced=bounced,
+        center=bounce_center,
+        frame_number=frame_number
+    )
+
+    # 8) CSV logging
     if save_csv:
-        # number of columns after frame_number
         n_fields = 18
-        # if no detections to draw at all, emit a blank row
         if det_to_draw.xyxy.size == 0:
             writer.writerow([frame_number] + [""] * n_fields)
         else:
-            for det_idx, (xy, conf) in enumerate(
-                zip(det_to_draw.xyxy, det_to_draw.confidence),
-                start=1
-            ):
+            for det_idx, (xy, conf) in enumerate(zip(det_to_draw.xyxy, det_to_draw.confidence), start=1):
                 x1, y1, x2, y2 = map(float, xy)
-                c_x, c_y = (x1 + x2) / 2, (y1 + y2) / 2
+                c_x, c_y      = (x1 + x2) / 2, (y1 + y2) / 2
 
-                chosen_id = (chosen_idx + 1) if chosen_idx is not None else ""
-                if chosen_box is not None:
+                if chosen_idx is not None:
                     cx1, cy1, cx2, cy2 = map(float, chosen_box)
                     ccx, ccy = chosen_center
+                    chosen_id = chosen_idx + 1
                 else:
                     cx1 = cy1 = cx2 = cy2 = ccx = ccy = ""
+                    chosen_id = ""
+
+                angle_str = f"{angle_deg:.1f}" if angle_deg is not None else ""
+                prev_bounce = int(bounced)
 
                 writer.writerow([
                     frame_number,
@@ -112,14 +119,13 @@ def run_inference(
                     x1, y1, x2, y2,
                     chosen_id,
                     cx1, cy1, cx2, cy2,
-                    ccx, ccy,traj_str,
-                    vertical_velocity if vertical_velocity is not None else "",
-                    int(bounced)  # 1 for bounce frame, 0 otherwise
+                    ccx, ccy,
+                    traj_str,
+                    angle_str,
+                    prev_bounce
                 ])
 
     return img
-
-
 # ——— Streamlit UI ———
 import streamlit as st
 
@@ -161,39 +167,45 @@ st.session_state.target_path = target
 
 if st.button("Run Inference"):
     with st.spinner("Running inference… this may take a while"):
-        tracker    = BallTracker(
+        tracker = BallTracker(
             max_history=10,
             static_thresh=5,
             stable_frames=5,
             lock_frames=3,
-            max_age=5
-        )
+            max_age=5)
         traj_annot = BallTrajectoryAnnotator(color=(0,255,0), thickness=2)
-        bounce_detector  = BounceDetector(dy_thresh=2.0, min_fall_frames=2)
-        bounce_annotator = BounceAnnotator(color=(0,0,255), radius=15)
+        angle_detector = AngleBounceDetector(min_angle_deg=40, debug=True)
+        bounce_annotator = BounceAnnotator(color=(0,255,255), radius=6, thickness=1, show_frames=10)
         # Open CSV and process
         with open(CSV_PATH, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "frame_number","det_idx","confidence",
-                "c_x","c_y","x1","y1","x2","y2",
-                "chosen_id","chosen_x1","chosen_y1","chosen_x2","chosen_y2","chosen_cx","chosen_cy","trajectory","vertical_velocity", "bounce"
+                "frame_number",
+                "det_idx",
+                "confidence",
+                "c_x","c_y",
+                "x1","y1","x2","y2",
+                "chosen_id",
+                "chosen_x1","chosen_y1","chosen_x2","chosen_y2",
+                "chosen_cx","chosen_cy",
+                "trajectory",
+                "angle",
+                "prev_frame_bounce"
             ])
             sv.process_video(
                 source_path=source,
                 target_path=target,
                 callback=lambda frame, fn: run_inference(
                     model, frame, fn,
-                    smoother=tracker,  
+                    smoother=tracker,
                     trajectory_annotator=traj_annot,
-                    bounce_detector=bounce_detector,
+                    angle_detector=angle_detector,
                     bounce_annotator=bounce_annotator,
                     save_csv=True,
                     writer=writer,
                     conf_threshold=0.25,
-                    iou_threshold=0.45
-                )
-            )
+                    iou_threshold=0.45))
+    
 
         st.session_state.processed = True
         st.success("Inference complete!")
