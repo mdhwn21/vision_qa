@@ -3,3 +3,8 @@ training/
 /Data/
 /BallDetection/.ipynb_checkpoints/
 /BallDetection/__pycache__/
+/.idea
+/.ipynb_checkpoints/
+/CourtDetection/Images/
+/CourtDetection/.ipynb_checkpoints/
+/Utilities/.ipynb_checkpoints/

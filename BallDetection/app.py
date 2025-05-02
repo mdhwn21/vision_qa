@@ -1,3 +1,4 @@
+import streamlit as st
 import os
 import tempfile
 import logging
@@ -126,8 +127,6 @@ def run_inference(
                 ])
 
     return img
-# ——— Streamlit UI ———
-import streamlit as st
 
 st.set_page_config(page_title="Video Inference")
 logging.basicConfig(level=logging.INFO)
