@@ -88,11 +88,11 @@ class CourtAnnotator:
         if apply_buffer:
             # overlay the buffer ring in red, semi‐transparent
             overlay = out.copy()
-            overlay[self.mask == 255] = (0,0,255)
+            overlay[self.mask == 255] = (255,255,255)
             out = cv2.addWeighted(overlay, alpha, out, 1-alpha, 0)
 
             # optionally outline the buffers
-            cv2.polylines(out, [self.court_big],   True, (0,255,0), 2)
-            cv2.polylines(out, [self.court_small], True, (255,0,0), 2)
+            cv2.polylines(out, [self.court_big],   True, (0,255,0), 1)
+            cv2.polylines(out, [self.court_small], True, (255,0,0), 1)
 
         return out
